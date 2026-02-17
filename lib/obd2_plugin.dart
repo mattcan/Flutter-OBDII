@@ -1,11 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
-import 'package:math_expressions/math_expressions.dart';
 
 enum Mode { parameter, config, dtc, at }
 
@@ -76,7 +74,7 @@ class Obd2Plugin {
     } else {
       try {
         _bluetoothState = await initBluetooth;
-        return await isBluetoothEnable;
+        return _bluetoothState == BluetoothState.STATE_ON;
       } catch (e) {
         throw Exception("OBD2 plugin not initialized");
       }
@@ -119,13 +117,13 @@ class Obd2Plugin {
   }
 
   Future<void> getConnection(
-      BluetoothDevice _device, Function(BluetoothConnection? connection) onConnected, Function(String message) onError) async {
+      BluetoothDevice device, Function(BluetoothConnection? connection) onConnected, Function(String message) onError) async {
     try {
       if (connection != null) {
         onConnected(connection);
         return;
       }
-      connection = await BluetoothConnection.toAddress(_device.address);
+      connection = await BluetoothConnection.toAddress(device.address);
       if (connection != null) {
         _activeTransport = ConnectionType.bluetooth;
         onConnected(connection);
@@ -256,17 +254,17 @@ class Obd2Plugin {
     return (stm.length * 150 + 1500);
   }
 
-  Future<bool> pairWithDevice(BluetoothDevice _device) async {
+  Future<bool> pairWithDevice(BluetoothDevice device) async {
     bool paired = false;
-    bool? isPaired = await _bluetooth.bondDeviceAtAddress(_device.address);
+    bool? isPaired = await _bluetooth.bondDeviceAtAddress(device.address);
     paired = isPaired ?? false;
     return paired;
   }
 
-  Future<bool> unpairWithDevice(BluetoothDevice _device) async {
+  Future<bool> unpairWithDevice(BluetoothDevice device) async {
     bool unpaired = false;
     try {
-      bool? isUnpaired = await _bluetooth.removeDeviceBondWithAddress(_device.address);
+      bool? isUnpaired = await _bluetooth.removeDeviceBondWithAddress(device.address);
       unpaired = isUnpaired ?? false;
     } catch (e) {
       unpaired = false;
@@ -274,8 +272,8 @@ class Obd2Plugin {
     return unpaired;
   }
 
-  Future<bool> isPaired(BluetoothDevice _device) async {
-    BluetoothBondState state = await _bluetooth.getBondStateForAddress(_device.address);
+  Future<bool> isPaired(BluetoothDevice device) async {
+    BluetoothBondState state = await _bluetooth.getBondStateForAddress(device.address);
     return state.isBonded;
   }
 
@@ -296,15 +294,14 @@ class Obd2Plugin {
     }
   }
 
-  double _volEff = 0.8322;
-  double _fTime(x) => x / 1000;
+  final double _volEff = 0.8322;
   double _fRpmToRps(x) => x / 60;
   double _fMbarToKpa(x) => x / 1000 * 100;
   double _fCelsiusToKelvin(x) => x + 273.15;
 
   double _fImap(rpm, pressMbar, tempC) {
-    double _v = (_fMbarToKpa(pressMbar) / _fCelsiusToKelvin(tempC) / 2);
-    return _fRpmToRps(rpm) * _v;
+    double v = (_fMbarToKpa(pressMbar) / _fCelsiusToKelvin(tempC) / 2);
+    return _fRpmToRps(rpm) * v;
   }
 
   double fMaf(rpm, pressMbar, tempC) {
@@ -341,25 +338,25 @@ class Obd2Plugin {
 
     if (_activeTransport == ConnectionType.wifi && _wifiSocket != null) {
       _wifiSocket!.listen(dataHandler,
-          onError: (e) => print("WiFi data error: $e"),
-          onDone: () => print("WiFi socket closed"));
+          onError: (e) => debugPrint("WiFi data error: $e"),
+          onDone: () => debugPrint("WiFi socket closed"));
     } else {
       connection?.input?.listen((Uint8List data) => dataHandler(data));
     }
   }
 
   void _processResponse(String response) {
-    if (this.onResponse != null) {
+    if (onResponse != null) {
       // Handle response processing for different modes (parameter, dtc, etc.)
       if (commandMode == Mode.parameter) {
         // Process parameter response logic here
-        this.onResponse!('PARAMETER', json.encode(parameterResponse), requestCode);
+        onResponse!('PARAMETER', json.encode(parameterResponse), requestCode);
       } else if (commandMode == Mode.dtc) {
         // Process DTC response logic here
-        this.onResponse!('DTC', json.encode(dtcCodesResponse), requestCode);
+        onResponse!('DTC', json.encode(dtcCodesResponse), requestCode);
       } else {
         // General command response
-        this.onResponse!(lastCommand, response, requestCode);
+        onResponse!(lastCommand, response, requestCode);
       }
       // Reset command mode
       commandMode = Mode.at;

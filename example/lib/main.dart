@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 
-import 'package:flutter/services.dart';
 import 'package:obd2_plugin/obd2_plugin.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 
@@ -61,7 +60,7 @@ class Float extends StatelessWidget {
         } else {
           if (!(await MyApp.of(context).obd2.isListeningToData)){
             MyApp.of(context).obd2.setOnDataReceived((command, response, requestCode){
-              print("$command => $response");
+              debugPrint("$command => $response");
             });
           }
           await Future.delayed(Duration(milliseconds: await MyApp.of(context).obd2.configObdWithJSON('''[
@@ -306,7 +305,7 @@ class Float extends StatelessWidget {
     }
 ]
           ''')), (){
-            print("dtc is finished");
+            debugPrint("dtc is finished");
           });
         }
       },
@@ -383,10 +382,10 @@ Future<void> _showWifiDialog(BuildContext context, Obd2Plugin obd2plugin) async 
               host: hostController.text,
               port: int.tryParse(portController.text) ?? Obd2Plugin.defaultWifiPort,
               onConnected: () {
-                print("WiFi connected to ${hostController.text}:${portController.text}");
+                debugPrint("WiFi connected to ${hostController.text}:${portController.text}");
               },
               onError: (message) {
-                print("WiFi error: $message");
+                debugPrint("WiFi error: $message");
               },
             );
           },
@@ -415,10 +414,10 @@ Future<void> showBluetoothList(BuildContext context, Obd2Plugin obd2plugin) asyn
                   onPressed: (){
                     obd2plugin.getConnection(devices[index], (connection)
                     {
-                      print("connected to bluetooth device.");
+                      debugPrint("connected to bluetooth device.");
                       Navigator.pop(builder);
                     }, (message) {
-                      print("error in connecting: $message");
+                      debugPrint("error in connecting: $message");
                       Navigator.pop(builder);
                     });
                   },
