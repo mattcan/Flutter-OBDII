@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
@@ -7,6 +8,8 @@ import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:math_expressions/math_expressions.dart';
 
 enum Mode { parameter, config, dtc, at }
+
+enum ConnectionType { bluetooth, wifi }
 
 // Define constants for magic numbers
 const int defaultRequestCode = 999999999999999999;
@@ -17,6 +20,12 @@ class Obd2Plugin {
 
   BluetoothState _bluetoothState = BluetoothState.UNKNOWN;
   final FlutterBluetoothSerial _bluetooth = FlutterBluetoothSerial.instance;
+
+  static const String defaultWifiHost = '192.168.0.10';
+  static const int defaultWifiPort = 35000;
+
+  Socket? _wifiSocket;
+  ConnectionType? _activeTransport;
 
   BluetoothConnection? connection;
   int requestCode = defaultRequestCode;
@@ -118,6 +127,7 @@ class Obd2Plugin {
       }
       connection = await BluetoothConnection.toAddress(_device.address);
       if (connection != null) {
+        _activeTransport = ConnectionType.bluetooth;
         onConnected(connection);
       } else {
         throw Exception("Unable to connect. Ensure the device is nearby or disconnected from previous connections.");
@@ -127,15 +137,45 @@ class Obd2Plugin {
     }
   }
 
+  Future<void> getWifiConnection({
+    String host = defaultWifiHost,
+    int port = defaultWifiPort,
+    required Function() onConnected,
+    required Function(String message) onError,
+  }) async {
+    try {
+      if (_wifiSocket != null) {
+        onConnected();
+        return;
+      }
+      _wifiSocket = await Socket.connect(host, port,
+          timeout: const Duration(seconds: 10));
+      _activeTransport = ConnectionType.wifi;
+      onConnected();
+    } catch (e) {
+      _wifiSocket = null;
+      _activeTransport = null;
+      onError("WiFi connection failed: ${e.toString()}");
+    }
+  }
+
   Future<bool> disconnect() async {
-    if (connection?.isConnected == true) {
+    bool disconnected = false;
+    if (_activeTransport == ConnectionType.wifi) {
+      _wifiSocket?.destroy();
+      _wifiSocket = null;
+      _activeTransport = null;
+      disconnected = true;
+    } else if (connection?.isConnected == true) {
       await connection?.close();
       connection = null;
-      return true;
+      _activeTransport = null;
+      disconnected = true;
     } else {
       connection = null;
-      return false;
+      _activeTransport = null;
     }
+    return disconnected;
   }
 
   Future<int> getParamsFromJSON(String jsonString, {int lastIndex = 0, int requestCode = 5}) async {
@@ -240,14 +280,20 @@ class Obd2Plugin {
   }
 
   Future<bool> get hasConnection async {
-    return connection != null;
+    return connection != null || _wifiSocket != null;
   }
 
   Future<void> _write(String command, int requestCode) async {
     lastCommand = command;
     this.requestCode = requestCode;
-    connection?.output.add(Uint8List.fromList(utf8.encode("$command\r\n")));
-    await connection?.output.allSent;
+    final bytes = Uint8List.fromList(utf8.encode("$command\r\n"));
+    if (_activeTransport == ConnectionType.wifi && _wifiSocket != null) {
+      _wifiSocket!.add(bytes);
+      await _wifiSocket!.flush();
+    } else {
+      connection?.output.add(bytes);
+      await connection?.output.allSent;
+    }
   }
 
   double _volEff = 0.8322;
@@ -279,18 +325,26 @@ class Obd2Plugin {
     String response = "";
     if (this.onResponse != null) {
       throw Exception("onDataReceived is already set.");
+    }
+    this.onResponse = onResponse;
+
+    void dataHandler(Uint8List data) {
+      String string = String.fromCharCodes(data);
+      if (!string.contains('>')) {
+        response += string;
+      } else {
+        response += string;
+        _processResponse(response);
+        response = "";
+      }
+    }
+
+    if (_activeTransport == ConnectionType.wifi && _wifiSocket != null) {
+      _wifiSocket!.listen(dataHandler,
+          onError: (e) => print("WiFi data error: $e"),
+          onDone: () => print("WiFi socket closed"));
     } else {
-      this.onResponse = onResponse;
-      connection?.input?.listen((Uint8List data) {
-        Uint8List bytes = Uint8List.fromList(data.toList());
-        String string = String.fromCharCodes(bytes);
-        if (!string.contains('>')) {
-          response += string;
-        } else {
-          response += string;
-          _processResponse(response);
-        }
-      });
+      connection?.input?.listen((Uint8List data) => dataHandler(data));
     }
   }
 
