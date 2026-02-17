@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
-
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
-import 'package:math_expressions/math_expressions.dart';
 
 enum Mode { parameter, config, dtc, at }
+
+enum ConnectionType { bluetooth, wifi }
 
 // Define constants for magic numbers
 const int defaultRequestCode = 999999999999999999;
@@ -17,6 +18,12 @@ class Obd2Plugin {
 
   BluetoothState _bluetoothState = BluetoothState.UNKNOWN;
   final FlutterBluetoothSerial _bluetooth = FlutterBluetoothSerial.instance;
+
+  static const String defaultWifiHost = '192.168.0.10';
+  static const int defaultWifiPort = 35000;
+
+  Socket? _wifiSocket;
+  ConnectionType? _activeTransport;
 
   BluetoothConnection? connection;
   int requestCode = defaultRequestCode;
@@ -67,7 +74,7 @@ class Obd2Plugin {
     } else {
       try {
         _bluetoothState = await initBluetooth;
-        return await isBluetoothEnable;
+        return _bluetoothState == BluetoothState.STATE_ON;
       } catch (e) {
         throw Exception("OBD2 plugin not initialized");
       }
@@ -110,14 +117,15 @@ class Obd2Plugin {
   }
 
   Future<void> getConnection(
-      BluetoothDevice _device, Function(BluetoothConnection? connection) onConnected, Function(String message) onError) async {
+      BluetoothDevice device, Function(BluetoothConnection? connection) onConnected, Function(String message) onError) async {
     try {
       if (connection != null) {
         onConnected(connection);
         return;
       }
-      connection = await BluetoothConnection.toAddress(_device.address);
+      connection = await BluetoothConnection.toAddress(device.address);
       if (connection != null) {
+        _activeTransport = ConnectionType.bluetooth;
         onConnected(connection);
       } else {
         throw Exception("Unable to connect. Ensure the device is nearby or disconnected from previous connections.");
@@ -127,15 +135,45 @@ class Obd2Plugin {
     }
   }
 
+  Future<void> getWifiConnection({
+    String host = defaultWifiHost,
+    int port = defaultWifiPort,
+    required Function() onConnected,
+    required Function(String message) onError,
+  }) async {
+    try {
+      if (_wifiSocket != null) {
+        onConnected();
+        return;
+      }
+      _wifiSocket = await Socket.connect(host, port,
+          timeout: const Duration(seconds: 10));
+      _activeTransport = ConnectionType.wifi;
+      onConnected();
+    } catch (e) {
+      _wifiSocket = null;
+      _activeTransport = null;
+      onError("WiFi connection failed: ${e.toString()}");
+    }
+  }
+
   Future<bool> disconnect() async {
-    if (connection?.isConnected == true) {
+    bool disconnected = false;
+    if (_activeTransport == ConnectionType.wifi) {
+      _wifiSocket?.destroy();
+      _wifiSocket = null;
+      _activeTransport = null;
+      disconnected = true;
+    } else if (connection?.isConnected == true) {
       await connection?.close();
       connection = null;
-      return true;
+      _activeTransport = null;
+      disconnected = true;
     } else {
       connection = null;
-      return false;
+      _activeTransport = null;
     }
+    return disconnected;
   }
 
   Future<int> getParamsFromJSON(String jsonString, {int lastIndex = 0, int requestCode = 5}) async {
@@ -216,17 +254,17 @@ class Obd2Plugin {
     return (stm.length * 150 + 1500);
   }
 
-  Future<bool> pairWithDevice(BluetoothDevice _device) async {
+  Future<bool> pairWithDevice(BluetoothDevice device) async {
     bool paired = false;
-    bool? isPaired = await _bluetooth.bondDeviceAtAddress(_device.address);
+    bool? isPaired = await _bluetooth.bondDeviceAtAddress(device.address);
     paired = isPaired ?? false;
     return paired;
   }
 
-  Future<bool> unpairWithDevice(BluetoothDevice _device) async {
+  Future<bool> unpairWithDevice(BluetoothDevice device) async {
     bool unpaired = false;
     try {
-      bool? isUnpaired = await _bluetooth.removeDeviceBondWithAddress(_device.address);
+      bool? isUnpaired = await _bluetooth.removeDeviceBondWithAddress(device.address);
       unpaired = isUnpaired ?? false;
     } catch (e) {
       unpaired = false;
@@ -234,31 +272,36 @@ class Obd2Plugin {
     return unpaired;
   }
 
-  Future<bool> isPaired(BluetoothDevice _device) async {
-    BluetoothBondState state = await _bluetooth.getBondStateForAddress(_device.address);
+  Future<bool> isPaired(BluetoothDevice device) async {
+    BluetoothBondState state = await _bluetooth.getBondStateForAddress(device.address);
     return state.isBonded;
   }
 
   Future<bool> get hasConnection async {
-    return connection != null;
+    return connection != null || _wifiSocket != null;
   }
 
   Future<void> _write(String command, int requestCode) async {
     lastCommand = command;
     this.requestCode = requestCode;
-    connection?.output.add(Uint8List.fromList(utf8.encode("$command\r\n")));
-    await connection?.output.allSent;
+    final bytes = Uint8List.fromList(utf8.encode("$command\r\n"));
+    if (_activeTransport == ConnectionType.wifi && _wifiSocket != null) {
+      _wifiSocket!.add(bytes);
+      await _wifiSocket!.flush();
+    } else {
+      connection?.output.add(bytes);
+      await connection?.output.allSent;
+    }
   }
 
-  double _volEff = 0.8322;
-  double _fTime(x) => x / 1000;
+  final double _volEff = 0.8322;
   double _fRpmToRps(x) => x / 60;
   double _fMbarToKpa(x) => x / 1000 * 100;
   double _fCelsiusToKelvin(x) => x + 273.15;
 
   double _fImap(rpm, pressMbar, tempC) {
-    double _v = (_fMbarToKpa(pressMbar) / _fCelsiusToKelvin(tempC) / 2);
-    return _fRpmToRps(rpm) * _v;
+    double v = (_fMbarToKpa(pressMbar) / _fCelsiusToKelvin(tempC) / 2);
+    return _fRpmToRps(rpm) * v;
   }
 
   double fMaf(rpm, pressMbar, tempC) {
@@ -279,33 +322,41 @@ class Obd2Plugin {
     String response = "";
     if (this.onResponse != null) {
       throw Exception("onDataReceived is already set.");
+    }
+    this.onResponse = onResponse;
+
+    void dataHandler(Uint8List data) {
+      String string = String.fromCharCodes(data);
+      if (!string.contains('>')) {
+        response += string;
+      } else {
+        response += string;
+        _processResponse(response);
+        response = "";
+      }
+    }
+
+    if (_activeTransport == ConnectionType.wifi && _wifiSocket != null) {
+      _wifiSocket!.listen(dataHandler,
+          onError: (e) => debugPrint("WiFi data error: $e"),
+          onDone: () => debugPrint("WiFi socket closed"));
     } else {
-      this.onResponse = onResponse;
-      connection?.input?.listen((Uint8List data) {
-        Uint8List bytes = Uint8List.fromList(data.toList());
-        String string = String.fromCharCodes(bytes);
-        if (!string.contains('>')) {
-          response += string;
-        } else {
-          response += string;
-          _processResponse(response);
-        }
-      });
+      connection?.input?.listen((Uint8List data) => dataHandler(data));
     }
   }
 
   void _processResponse(String response) {
-    if (this.onResponse != null) {
+    if (onResponse != null) {
       // Handle response processing for different modes (parameter, dtc, etc.)
       if (commandMode == Mode.parameter) {
         // Process parameter response logic here
-        this.onResponse!('PARAMETER', json.encode(parameterResponse), requestCode);
+        onResponse!('PARAMETER', json.encode(parameterResponse), requestCode);
       } else if (commandMode == Mode.dtc) {
         // Process DTC response logic here
-        this.onResponse!('DTC', json.encode(dtcCodesResponse), requestCode);
+        onResponse!('DTC', json.encode(dtcCodesResponse), requestCode);
       } else {
         // General command response
-        this.onResponse!(lastCommand, response, requestCode);
+        onResponse!(lastCommand, response, requestCode);
       }
       // Reset command mode
       commandMode = Mode.at;

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 
-import 'package:flutter/services.dart';
 import 'package:obd2_plugin/obd2_plugin.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 
@@ -54,17 +53,14 @@ class Float extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return FloatingActionButton(
-      child: const Icon(Icons.bluetooth),
+      child: const Icon(Icons.cable),
       onPressed: () async {
-        if(!(await MyApp.of(context).obd2.isBluetoothEnable)){
-          await MyApp.of(context).obd2.enableBluetooth ;
-        }
         if (!(await MyApp.of(context).obd2.hasConnection)){
-          await showBluetoothList(context, MyApp.of(context).obd2);
+          await _showConnectionTypeDialog(context, MyApp.of(context).obd2);
         } else {
-          if (!(await MyApp.of(context).obd2.isListenToDataInitialed)){
+          if (!(await MyApp.of(context).obd2.isListeningToData)){
             MyApp.of(context).obd2.setOnDataReceived((command, response, requestCode){
-              print("$command => $response");
+              debugPrint("$command => $response");
             });
           }
           await Future.delayed(Duration(milliseconds: await MyApp.of(context).obd2.configObdWithJSON('''[
@@ -309,7 +305,7 @@ class Float extends StatelessWidget {
     }
 ]
           ''')), (){
-            print("dtc is finished");
+            debugPrint("dtc is finished");
           });
         }
       },
@@ -317,6 +313,88 @@ class Float extends StatelessWidget {
   }
 }
 
+
+Future<void> _showConnectionTypeDialog(BuildContext context, Obd2Plugin obd2plugin) async {
+  await showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Choose Connection Type'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.wifi),
+            title: const Text('WiFi / TCP'),
+            onTap: () {
+              Navigator.pop(ctx);
+              _showWifiDialog(context, obd2plugin);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.bluetooth),
+            title: const Text('Bluetooth'),
+            onTap: () async {
+              Navigator.pop(ctx);
+              if (!(await obd2plugin.isBluetoothEnable)) {
+                await obd2plugin.enableBluetooth;
+              }
+              await showBluetoothList(context, obd2plugin);
+            },
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+Future<void> _showWifiDialog(BuildContext context, Obd2Plugin obd2plugin) async {
+  final hostController = TextEditingController(text: Obd2Plugin.defaultWifiHost);
+  final portController = TextEditingController(text: Obd2Plugin.defaultWifiPort.toString());
+
+  await showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('WiFi / TCP Connection'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: hostController,
+            decoration: const InputDecoration(labelText: 'IP Address'),
+            keyboardType: TextInputType.number,
+          ),
+          TextField(
+            controller: portController,
+            decoration: const InputDecoration(labelText: 'Port'),
+            keyboardType: TextInputType.number,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () {
+            Navigator.pop(ctx);
+            obd2plugin.getWifiConnection(
+              host: hostController.text,
+              port: int.tryParse(portController.text) ?? Obd2Plugin.defaultWifiPort,
+              onConnected: () {
+                debugPrint("WiFi connected to ${hostController.text}:${portController.text}");
+              },
+              onError: (message) {
+                debugPrint("WiFi error: $message");
+              },
+            );
+          },
+          child: const Text('Connect'),
+        ),
+      ],
+    ),
+  );
+}
 
 Future<void> showBluetoothList(BuildContext context, Obd2Plugin obd2plugin) async {
   List<BluetoothDevice> devices = await obd2plugin.getPairedDevices ;
@@ -336,10 +414,10 @@ Future<void> showBluetoothList(BuildContext context, Obd2Plugin obd2plugin) asyn
                   onPressed: (){
                     obd2plugin.getConnection(devices[index], (connection)
                     {
-                      print("connected to bluetooth device.");
+                      debugPrint("connected to bluetooth device.");
                       Navigator.pop(builder);
                     }, (message) {
-                      print("error in connecting: $message");
+                      debugPrint("error in connecting: $message");
                       Navigator.pop(builder);
                     });
                   },

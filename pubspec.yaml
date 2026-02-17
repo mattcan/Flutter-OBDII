@@ -22,7 +22,7 @@ flutter:
   plugin:
     platforms:
       android:
-        package: app.begaz.obd.two.plugin.obd2_plugin
+        package: app.mattcan.obd.two.plugin.obd2_plugin
         pluginClass: Obd2Plugin
       ios:
         pluginClass: Obd2Plugin

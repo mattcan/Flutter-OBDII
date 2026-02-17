@@ -18,7 +18,7 @@ plugins {
 }
 
 // Move 'group' and 'version' declarations after plugins {}
-group 'app.begaz.obd.two.plugin.obd2_plugin'
+group 'app.mattcan.obd.two.plugin.obd2_plugin'
 version '1.0.0' // Use semantic versioning
 
 android {
