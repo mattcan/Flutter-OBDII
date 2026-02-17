@@ -1,4 +1,4 @@
-package app.begaz.obd.two.plugin.obd2_plugin
+package app.mattcan.obd.two.plugin.obd2_plugin
 
 import android.bluetooth.BluetoothAdapter
 import android.content.Intent

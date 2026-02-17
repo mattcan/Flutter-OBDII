@@ -23,7 +23,7 @@ if (flutterVersionName == null) {
 }
 
 android {
-    namespace "app.begaz.obd.two.plugin.obd2_plugin_example"
+    namespace "app.mattcan.obd.two.plugin.obd2_plugin_example"
     compileSdk 34
 
     compileOptions {
@@ -40,7 +40,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "app.begaz.obd.two.plugin.obd2_plugin_example"
+        applicationId "app.mattcan.obd.two.plugin.obd2_plugin_example"
         minSdk 23
         targetSdk 34
         versionCode flutterVersionCode.toInteger()
